@@ -66,6 +66,7 @@ type CaseRecord = {
   follow_up_answers?: string[];
   follow_up_request?: FollowUpRequest | null;
   follow_up_response?: FollowUpResponse | null;
+  patient_metadata?: { age?: string; sex?: string };
 };
 
 type FollowUpRequest = {
@@ -362,14 +363,10 @@ function getCurrentUserFromStorage(): Partial<User> {
   }
 }
 
-function doctorDisplayName(name: string | undefined) {
-  const displayName = name || "Meera";
-  return displayName.replace(/^Dr\.\s*/i, "");
-}
-
 function AppShell({ role, children }: { role: Role; children: ReactNode }) {
   const currentUser = getCurrentUserFromStorage();
-  const userName = currentUser.name || (role === "asha" ? "Healthcare worker" : "Doctor");
+  const userName =
+    currentUser.name || (role === "asha" ? "Healthcare worker" : "Doctor");
   const userRole = role === "asha" ? "ASHA worker" : "Doctor";
   const userInitials = userName.charAt(0).toUpperCase();
 
@@ -380,7 +377,8 @@ function AppShell({ role, children }: { role: Role; children: ReactNode }) {
   };
 
   const navItems = role === "asha" ? ASHA_NAV_ITEMS : DOCTOR_NAV_ITEMS;
-  const dashboardPath = role === "asha" ? "/asha/dashboard" : "/doctor/dashboard";
+  const dashboardPath =
+    role === "asha" ? "/asha/dashboard" : "/doctor/dashboard";
 
   return (
     <div className={`app-shell app-shell--${role}`}>
@@ -424,7 +422,10 @@ function AppShell({ role, children }: { role: Role; children: ReactNode }) {
               <small>{userRole}</small>
             </div>
           </div>
-          <button className="btn btn-ghost btn-sm btn-full" onClick={handleLogout}>
+          <button
+            className="btn btn-ghost btn-sm btn-full"
+            onClick={handleLogout}
+          >
             Logout
           </button>
         </div>
@@ -460,7 +461,9 @@ function MobileNavigationItem({
     <NavLink
       to={item.to}
       end={item.to === dashboardPath}
-      className={({ isActive }) => `mobile-nav-item ${isActive ? "active" : ""}`}
+      className={({ isActive }) =>
+        `mobile-nav-item ${isActive ? "active" : ""}`
+      }
     >
       <span className="mnav-icon" aria-hidden="true">
         {item.icon}
@@ -524,7 +527,6 @@ function AshaLoginPage({
       title="Welcome, ASHA Worker"
       subtitle="Record and triage patient symptoms, even when you're offline."
       fieldLabel="Mobile Number / Email"
-      helperText="📴 Works offline for recording and case capture"
       ctaLabel="Sign In"
       footerText="Need help signing in?"
     />
@@ -552,7 +554,6 @@ function DoctorLoginPage({
       title="Doctor Sign In"
       subtitle="Review patient cases and AI-assisted triage assessments."
       fieldLabel="Email / Medical ID"
-      helperText="Clinician workflow for case review and escalation"
       ctaLabel="Sign In"
       footerText="Forgot password?"
     />
@@ -580,7 +581,7 @@ function RoleLoginPage({
   title: string;
   subtitle: string;
   fieldLabel: string;
-  helperText: string;
+  helperText?: string;
   ctaLabel: string;
   footerText: string;
 }) {
@@ -639,10 +640,11 @@ function RoleLoginPage({
           <div className="auth-brand-mark">S</div>
           <div className="auth-brand-name">Silent Symptom Spotter</div>
         </div>
-        
+
         <div className="auth-card">
           <h1>{title}</h1>
           <p className="auth-subtitle">{subtitle}</p>
+          {helperText && <p className="auth-helper">{helperText}</p>}
 
           <form onSubmit={handleSubmit} className="auth-form">
             <label>
@@ -652,7 +654,9 @@ function RoleLoginPage({
                 value={identifier}
                 onChange={(event) => setIdentifier(event.target.value)}
                 placeholder={
-                  role === "asha" ? "e.g. asha@demo.com" : "e.g. doctor@demo.com"
+                  role === "asha"
+                    ? "e.g. asha@demo.com"
+                    : "e.g. doctor@demo.com"
                 }
                 required
               />
@@ -700,9 +704,161 @@ function RoleLoginPage({
   );
 }
 
+function isToday(value: string) {
+  const date = new Date(value);
+  const today = new Date();
+  return date.toDateString() === today.toDateString();
+}
+
+function isAwaitingReview(item: CaseRecord) {
+  return ["AWAITING_DOCTOR_REVIEW", "AWAITING_REVIEW"].includes(item.status);
+}
+
+function MetricCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "primary" | "warning" | "danger";
+}) {
+  return (
+    <div className="stat-card">
+      <span className="stat-card-label">{label}</span>
+      <strong className={`stat-card-value${tone ? ` ${tone}` : ""}`}>
+        {value}
+      </strong>
+    </div>
+  );
+}
+
+function PanelHeading({
+  eyebrow,
+  title,
+  action,
+}: {
+  eyebrow?: string;
+  title: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="panel-header">
+      <div>
+        {eyebrow && <span className="eyebrow">{eyebrow}</span>}
+        <h3>{title}</h3>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="loading-state">
+      <span className="spinner" /> <span>Loading workflow data...</span>
+    </div>
+  );
+}
+
+function EmptyState({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="empty-state compact-empty">
+      <div className="empty-icon">✓</div>
+      <h4>{title}</h4>
+      <p>{text}</p>
+    </div>
+  );
+}
+
+function CaseList({
+  cases,
+  onOpen,
+  emptyTitle,
+  emptyText,
+}: {
+  cases: CaseRecord[];
+  onOpen: (item: CaseRecord) => void;
+  emptyTitle: string;
+  emptyText: string;
+}) {
+  if (!cases.length) return <EmptyState title={emptyTitle} text={emptyText} />;
+  return (
+    <div className="case-list">
+      {cases.map((item) => (
+        <button
+          key={item.id}
+          className="case-card dense-case-card"
+          onClick={() => onOpen(item)}
+        >
+          <div className="case-card__top">
+            <div>
+              <div className="case-card__number">{item.case_number}</div>
+              <div className="case-card__time">
+                {formatDateTime(item.updated_at || item.created_at)}
+              </div>
+            </div>
+            <div className="case-card__badges">
+              <span
+                className={`triage-badge triage-${item.triage_level.toLowerCase().replace("_priority", "")}`}
+              >
+                {triageLabel(item.triage_level)}
+              </span>
+              <span
+                className={`status-badge status-${statusTone(item.status)}`}
+              >
+                {statusLabel(item.status)}
+              </span>
+            </div>
+          </div>
+          <div className="case-card__body">
+            <strong className="case-card__patient">
+              {item.patient_reference}
+            </strong>
+            <span className="case-card__meta">{item.location}</span>
+            <span className="case-card__meta">{item.triage_reason}</span>
+          </div>
+          <span className="case-card__open">Open case</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AlertRow({ alert }: { alert: AlertItem }) {
+  return (
+    <div className="alert-row">
+      <div>
+        <strong>{alert.title}</strong>
+        <p>{alert.message}</p>
+      </div>
+      <span className="text-xs text-muted">
+        {formatDateTime(alert.created_at)}
+      </span>
+    </div>
+  );
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function statusTone(status: string) {
+  if (status === "FOLLOW_UP_REQUIRED") return "followup";
+  if (status === "ESCALATED") return "escalated";
+  if (status === "ACKNOWLEDGED" || status === "FOLLOW_UP_COMPLETED")
+    return "acknowledged";
+  if (status.includes("REVIEW")) return "awaiting";
+  return "neutral";
+}
+
 function AshaDashboard() {
   const navigate = useNavigate();
   const [cases, setCases] = useState<CaseRecord[]>([]);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const currentUser = getCurrentUserFromStorage();
@@ -711,6 +867,8 @@ function AshaDashboard() {
     try {
       const response = await apiFetch("/cases");
       setCases(response.cases || []);
+      const alertResponse = await apiFetch("/alerts");
+      setAlerts(alertResponse.alerts || []);
     } catch (fetchError) {
       setError(
         fetchError instanceof Error
@@ -730,15 +888,29 @@ function AshaDashboard() {
 
   const counts = useMemo(
     () => ({
-      routine: cases.filter((item) => item.triage_level === "ROUTINE").length,
-      urgent: cases.filter((item) => item.triage_level === "URGENT").length,
-      high: cases.filter((item) => item.triage_level === "HIGH_PRIORITY")
-        .length,
-      emergency: cases.filter((item) => item.triage_level === "EMERGENCY")
+      today: cases.filter((item) => isToday(item.created_at)).length,
+      awaitingAnalysis: cases.filter(
+        (item) => item.status === "PENDING_ANALYSIS",
+      ).length,
+      awaitingReview: cases.filter(isAwaitingReview).length,
+      followUp: cases.filter((item) => item.status === "FOLLOW_UP_REQUIRED")
         .length,
     }),
     [cases],
   );
+
+  const attentionCases = cases
+    .filter(
+      (item) =>
+        ["FOLLOW_UP_REQUIRED", "ACKNOWLEDGED", "ESCALATED"].includes(
+          item.status,
+        ) || item.sync_status === "PENDING_SYNC",
+    )
+    .slice(0, 5);
+  const pendingSync = cases.filter(
+    (item) => item.sync_status === "PENDING_SYNC",
+  ).length;
+  const unreadAlerts = alerts.filter((item) => !item.read_flag).slice(0, 4);
 
   return (
     <AppShell role="asha">
@@ -748,121 +920,173 @@ function AshaDashboard() {
             <div>
               <span className="eyebrow">ASHA worker</span>
               <h1>Good morning, {currentUser.name || "Asha"}</h1>
+              <p className="page-subtitle">
+                Your daily patient capture and follow-up workspace
+              </p>
             </div>
-            <span className="status-chip offline">📴 Offline</span>
+            <span
+              className={`status-chip ${navigator.onLine ? "online" : "offline"}`}
+            >
+              {navigator.onLine ? "Online" : "Offline mode active"}
+            </span>
           </div>
         </header>
 
         <section className="hero-card healthcare-hero">
           <div>
-            <span className="eyebrow">Ready to record</span>
-            <h2>Ready to record today’s patient cases?</h2>
+            <span className="eyebrow">Primary action</span>
+            <h2>Record a new patient voice note</h2>
+            <p className="text-secondary">
+              Capture symptoms and send the case for AI-assisted triage.
+            </p>
           </div>
           <button
             className="btn btn-primary btn-lg"
             onClick={() => navigate("/asha/cases/new")}
           >
-            🎙️ Record New Patient
+            + Record New Patient
           </button>
         </section>
 
         <section className="stats-grid stats-grid-5">
-          <div className="stat-card">
-            <span className="stat-card-label">Today's cases</span>
-            <strong className="stat-card-value">{cases.length}</strong>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card-label">Routine</span>
-            <strong className="stat-card-value primary">{counts.routine}</strong>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card-label">Urgent</span>
-            <strong className="stat-card-value warning">{counts.urgent}</strong>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card-label">High Priority</span>
-            <strong className="stat-card-value warning">{counts.high}</strong>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card-label">Emergency</span>
-            <strong className="stat-card-value danger">{counts.emergency}</strong>
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <span className="eyebrow">Offline status</span>
-              <h3>Waiting to sync</h3>
-            </div>
-            <span className="status-chip neutral">
-              {
-                cases.filter((item) => item.sync_status === "PENDING_SYNC")
-                  .length
-              }{" "}
-              cases
-            </span>
-          </div>
-          <div className="panel-body">
-            <p className="text-muted">
-              📴 Offline mode. Changes will sync automatically when your
-              connection returns.
-            </p>
-          </div>
+          <MetricCard label="Today's cases" value={counts.today} />
+          <MetricCard
+            label="Awaiting analysis"
+            value={counts.awaitingAnalysis}
+            tone="primary"
+          />
+          <MetricCard
+            label="Awaiting doctor review"
+            value={counts.awaitingReview}
+            tone="primary"
+          />
+          <MetricCard
+            label="Follow-up required"
+            value={counts.followUp}
+            tone="warning"
+          />
+          <MetricCard
+            label="Unread alerts"
+            value={unreadAlerts.length}
+            tone={unreadAlerts.length ? "danger" : undefined}
+          />
         </section>
 
         {error && <div className="error-box">{error}</div>}
 
-        <section className="panel">
-          <div className="panel-header">
-            <h3>Recent cases</h3>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => navigate("/asha/cases")}
-            >
-              View all
-            </button>
-          </div>
+        <div className="workspace-grid">
+          <section className="panel">
+            <PanelHeading
+              eyebrow="Workflow queue"
+              title="Cases requiring attention"
+              action={
+                <span className="status-chip neutral">
+                  {attentionCases.length} active
+                </span>
+              }
+            />
+            <div className="panel-body">
+              {loading ? (
+                <LoadingState />
+              ) : (
+                <CaseList
+                  cases={attentionCases}
+                  onOpen={(item) => navigate(`/asha/cases/${item.id}`)}
+                  emptyTitle="No cases currently need attention"
+                  emptyText="Follow-up, acknowledgements, escalations and pending syncs will appear here."
+                />
+              )}
+            </div>
+          </section>
+          <section className="panel">
+            <PanelHeading
+              eyebrow="Connectivity"
+              title={navigator.onLine ? "Online" : "Offline mode active"}
+              action={
+                <span className="status-chip neutral">
+                  {pendingSync} pending sync
+                </span>
+              }
+            />
+            <div className="panel-body status-summary">
+              <strong>
+                {navigator.onLine
+                  ? pendingSync
+                    ? "Sync in progress"
+                    : "All cases synced"
+                  : "Changes saved on this device"}
+              </strong>
+              <p className="text-secondary">
+                {navigator.onLine
+                  ? "New submissions and updates will continue to sync automatically."
+                  : `${pendingSync} case${pendingSync === 1 ? "" : "s"} waiting to sync when connection returns.`}
+              </p>
+              <div className="quick-links">
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => navigate("/asha/cases")}
+                >
+                  Cases
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => navigate("/asha/alerts")}
+                >
+                  Alerts ({unreadAlerts.length})
+                </button>
+              </div>
+            </div>
+            <div className="panel-divider" />
+            <PanelHeading
+              eyebrow="Notifications"
+              title="Unread alerts"
+              action={
+                <button
+                  className="text-link"
+                  onClick={() => navigate("/asha/alerts")}
+                >
+                  View all
+                </button>
+              }
+            />
+            <div className="panel-body compact-list">
+              {unreadAlerts.length ? (
+                unreadAlerts.map((alert) => (
+                  <AlertRow key={alert.id} alert={alert} />
+                ))
+              ) : (
+                <EmptyState
+                  title="No unread alerts"
+                  text="You are up to date with the care team."
+                />
+              )}
+            </div>
+          </section>
+        </div>
 
+        <section className="panel">
+          <PanelHeading
+            eyebrow="Patient record activity"
+            title="Recent cases"
+            action={
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => navigate("/asha/cases")}
+              >
+                View all cases
+              </button>
+            }
+          />
           <div className="panel-body">
             {loading ? (
-            <div className="loading-state">
-              <span className="spinner" />
-              <span>Loading cases…</span>
-            </div>
-            ) : cases.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">✓</div>
-                <h4>No cases recorded today.</h4>
-                <p>Start by recording a new patient.</p>
-              </div>
+              <LoadingState />
             ) : (
-              <div className="case-list">
-                {cases.map((item) => (
-                  <button
-                    key={item.id}
-                    className="case-card"
-                    onClick={() => navigate(`/asha/cases/${item.id}`)}
-                  >
-                    <div className="case-card__top">
-                      <div>
-                        <div className="case-card__number">{item.case_number}</div>
-                        <div className="case-card__time">
-                          {new Date(item.created_at).toLocaleString()}
-                        </div>
-                      </div>
-                      <span className={`triage-badge triage-${item.triage_level.toLowerCase().replace('_priority', '')}`}>
-                        {triageLabel(item.triage_level)}
-                      </span>
-                    </div>
-                    <div className="case-card__body">
-                      <strong className="case-card__patient">{item.patient_reference}</strong>
-                      <span className="case-card__meta">{item.location}</span>
-                      <span className="case-card__meta">{statusLabel(item.status)}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <CaseList
+                cases={cases.slice(0, 6)}
+                onOpen={(item) => navigate(`/asha/cases/${item.id}`)}
+                emptyTitle="No cases recorded yet"
+                emptyText="Start by recording a new patient."
+              />
             )}
           </div>
         </section>
@@ -929,19 +1153,27 @@ function AshaCaseIndex() {
                   >
                     <div className="case-card__top">
                       <div>
-                        <div className="case-card__number">{item.case_number}</div>
+                        <div className="case-card__number">
+                          {item.case_number}
+                        </div>
                         <div className="case-card__time">
                           {new Date(item.created_at).toLocaleString()}
                         </div>
                       </div>
-                      <span className={`triage-badge triage-${item.triage_level.toLowerCase().replace('_priority', '')}`}>
+                      <span
+                        className={`triage-badge triage-${item.triage_level.toLowerCase().replace("_priority", "")}`}
+                      >
                         {triageLabel(item.triage_level)}
                       </span>
                     </div>
                     <div className="case-card__body">
-                      <strong className="case-card__patient">{item.patient_reference}</strong>
+                      <strong className="case-card__patient">
+                        {item.patient_reference}
+                      </strong>
                       <span className="case-card__meta">{item.location}</span>
-                      <span className="case-card__meta">{statusLabel(item.status)}</span>
+                      <span className="case-card__meta">
+                        {statusLabel(item.status)}
+                      </span>
                     </div>
                   </button>
                 ))}
@@ -1306,7 +1538,12 @@ function AshaCaseDetail() {
     }
   };
 
-  if (loading) return <div className="loading-screen"><span className="spinner"></span> &nbsp; Loading case…</div>;
+  if (loading)
+    return (
+      <div className="loading-screen">
+        <span className="spinner"></span> &nbsp; Loading case…
+      </div>
+    );
   if (!caseData) return <div className="error-box">Case not found.</div>;
 
   return (
@@ -1355,7 +1592,9 @@ function AshaCaseDetail() {
           <section className="panel triage-assessment">
             <div className="panel-header">
               <h3>AI triage</h3>
-              <span className={`triage-badge triage-${caseData.triage_level.toLowerCase().replace('_priority', '')}`}>
+              <span
+                className={`triage-badge triage-${caseData.triage_level.toLowerCase().replace("_priority", "")}`}
+              >
                 {triageLabel(caseData.triage_level)}
               </span>
             </div>
@@ -1371,9 +1610,10 @@ function AshaCaseDetail() {
                 </div>
               </div>
               <p className="triage-reason">{caseData.triage_reason}</p>
-              
+
               <div className="ai-disclaimer">
-                AI Assessment: Always verify clinically. Triage is indicative based on provided context.
+                AI Assessment: Always verify clinically. Triage is indicative
+                based on provided context.
               </div>
             </div>
           </section>
@@ -1388,8 +1628,10 @@ function AshaCaseDetail() {
                   <div className="followup-warning">
                     Action required to proceed with this case.
                   </div>
-                  <p className="text-muted">Select the response for each requested question.</p>
-                  <div style={{ marginTop: '14px' }}>
+                  <p className="text-muted">
+                    Select the response for each requested question.
+                  </p>
+                  <div style={{ marginTop: "14px" }}>
                     {caseData.follow_up_request.questions.map((question) => (
                       <div className="followup-question-item" key={question}>
                         <strong>{question}</strong>
@@ -1410,15 +1652,17 @@ function AshaCaseDetail() {
                       </div>
                     ))}
                   </div>
-                  
+
                   {caseData.follow_up_request.note && (
                     <div className="context-phrase-block">
                       <small>Doctor note</small>
-                      <p className="context-phrase-text">"{caseData.follow_up_request.note}"</p>
+                      <p className="context-phrase-text">
+                        "{caseData.follow_up_request.note}"
+                      </p>
                     </div>
                   )}
 
-                  <label style={{ marginTop: '14px' }}>
+                  <label style={{ marginTop: "14px" }}>
                     Note for doctor
                     <textarea
                       rows={3}
@@ -1427,14 +1671,16 @@ function AshaCaseDetail() {
                       placeholder="Add any additional context..."
                     />
                   </label>
-                  
+
                   <div className="button-row">
                     <button
                       className="btn btn-primary"
                       onClick={submitFollowUp}
                       disabled={submitting}
                     >
-                      {submitting ? "Submitting follow-up..." : "Submit follow-up"}
+                      {submitting
+                        ? "Submitting follow-up..."
+                        : "Submit follow-up"}
                     </button>
                   </div>
                 </div>
@@ -1449,21 +1695,35 @@ function AshaCaseDetail() {
                 </div>
                 <div className="panel-body">
                   {caseData.follow_up_response.answers.map((answer) => (
-                    <div className="followup-question-item" key={answer.question}>
+                    <div
+                      className="followup-question-item"
+                      key={answer.question}
+                    >
                       <strong>{answer.question}</strong>
-                      <span className="followup-answer">ASHA response: {answer.answer}</span>
+                      <span className="followup-answer">
+                        ASHA response: {answer.answer}
+                      </span>
                     </div>
                   ))}
-                  
+
                   {caseData.follow_up_response.note && (
-                    <div className="context-phrase-block" style={{ marginTop: '12px' }}>
+                    <div
+                      className="context-phrase-block"
+                      style={{ marginTop: "12px" }}
+                    >
                       <small>ASHA Note</small>
-                      <p className="context-phrase-text">"{caseData.follow_up_response.note}"</p>
+                      <p className="context-phrase-text">
+                        "{caseData.follow_up_response.note}"
+                      </p>
                     </div>
                   )}
                   {caseData.follow_up_response.submitted_by && (
-                    <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '12px' }}>
-                      Submitted by: {caseData.follow_up_response.submitted_by.name}
+                    <p
+                      className="text-muted"
+                      style={{ fontSize: "0.8rem", marginTop: "12px" }}
+                    >
+                      Submitted by:{" "}
+                      {caseData.follow_up_response.submitted_by.name}
                     </p>
                   )}
                 </div>
@@ -1492,7 +1752,9 @@ function AshaCaseDetail() {
                   >
                     <strong className="symptom-name">{symptom.name}</strong>
                     <span className="symptom-duration">{symptom.duration}</span>
-                    <span className={`severity-badge severity-${symptom.severity.toLowerCase()}`}>
+                    <span
+                      className={`severity-badge severity-${symptom.severity.toLowerCase()}`}
+                    >
                       {symptom.severity}
                     </span>
                   </div>
@@ -1508,9 +1770,11 @@ function AshaCaseDetail() {
             <div className="context-body">
               <div className="context-phrase-block">
                 <small>Analyzed Phrase</small>
-                <span className="context-phrase-text">"{caseData.context_analysis.phrase}"</span>
+                <span className="context-phrase-text">
+                  "{caseData.context_analysis.phrase}"
+                </span>
               </div>
-              
+
               <div className="context-grid">
                 <div className="context-item">
                   <small>Phrase intensity</small>
@@ -1529,9 +1793,10 @@ function AshaCaseDetail() {
                   <span>{caseData.context_analysis.voiceIndicators}</span>
                 </div>
               </div>
-              
+
               <p className="context-interpretation">
-                <strong>Interpretation:</strong> {caseData.context_analysis.interpretation}
+                <strong>Interpretation:</strong>{" "}
+                {caseData.context_analysis.interpretation}
               </p>
             </div>
           </section>
@@ -1546,14 +1811,15 @@ function DoctorDashboard() {
   const [cases, setCases] = useState<CaseRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
-  const currentUser = getCurrentUserFromStorage();
-
   const fetchCases = async () => {
     try {
       const response = await apiFetch("/cases");
       setCases(response.cases || []);
+      const alertResponse = await apiFetch("/alerts");
+      setAlerts(alertResponse.alerts || []);
     } catch (fetchError) {
       setError(
         fetchError instanceof Error
@@ -1588,7 +1854,7 @@ function DoctorDashboard() {
         item.patient_reference.toLowerCase().includes(query) ||
         item.location.toLowerCase().includes(query) ||
         item.triage_reason.toLowerCase().includes(query);
-      
+
       return matchesFilter && matchesSearch;
     });
   }, [cases, filter, search]);
@@ -1596,18 +1862,23 @@ function DoctorDashboard() {
   const counts = useMemo(() => {
     return {
       total: cases.length,
-      emergency: cases.filter((item) => item.triage_level === "EMERGENCY").length,
+      awaiting: cases.filter(isAwaitingReview).length,
+      urgent: cases.filter((item) => item.triage_level === "URGENT").length,
+      high: cases.filter((item) => item.triage_level === "HIGH_PRIORITY")
+        .length,
+      emergency: cases.filter((item) => item.triage_level === "EMERGENCY")
+        .length,
     };
   }, [cases]);
 
-  const urgentCases = useMemo(() => {
-    return cases.filter(
-      (item) =>
-        item.triage_level === "EMERGENCY" ||
-        item.triage_level === "HIGH_PRIORITY" ||
-        item.triage_level === "URGENT"
-    );
-  }, [cases]);
+  const urgentCases = filteredCases
+    .filter((item) =>
+      ["EMERGENCY", "HIGH_PRIORITY", "URGENT"].includes(item.triage_level),
+    )
+    .slice(0, 6);
+  const recentActivity = [...cases]
+    .sort((a, b) => +new Date(b.updated_at) - +new Date(a.updated_at))
+    .slice(0, 5);
 
   return (
     <AppShell role="doctor">
@@ -1616,91 +1887,173 @@ function DoctorDashboard() {
           <div className="page-title-row">
             <div>
               <span className="eyebrow">Primary Health Center</span>
-              <h1>Welcome, Dr. {currentUser.name || "Doctor"}</h1>
+              <h1>Doctor Dashboard</h1>
+              <p className="page-subtitle">
+                Review cases requiring clinical attention, follow-up, or
+                escalation.
+              </p>
             </div>
             <span className="status-chip online">🟢 Online</span>
           </div>
         </header>
 
-        <section className="stats-grid stats-grid-4">
-          <div className="stat-card">
-            <span className="stat-card-label">Total active cases</span>
-            <strong className="stat-card-value">{counts.total}</strong>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card-label">Awaiting review</span>
-            <strong className="stat-card-value primary">
-              {
-                cases.filter(
-                  (c) =>
-                    c.status === "AWAITING_REVIEW" &&
-                    c.triage_level !== "EMERGENCY"
-                ).length
-              }
-            </strong>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card-label">Emergencies</span>
-            <strong className="stat-card-value danger">{counts.emergency}</strong>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card-label">ASHA workers online</span>
-            <strong className="stat-card-value">12</strong>
-          </div>
+        <section className="stats-grid stats-grid-5">
+          <MetricCard label="Total active cases" value={counts.total} />
+          <MetricCard
+            label="Awaiting review"
+            value={counts.awaiting}
+            tone="primary"
+          />
+          <MetricCard label="Urgent" value={counts.urgent} tone="warning" />
+          <MetricCard
+            label="High priority"
+            value={counts.high}
+            tone="warning"
+          />
+          <MetricCard
+            label="Emergency"
+            value={counts.emergency}
+            tone="danger"
+          />
         </section>
 
         {error && <div className="error-box">{error}</div>}
 
-        <section className="panel">
-          <div className="panel-header">
-            <h3>Urgent cases & emergencies</h3>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => navigate("/doctor/cases")}
-            >
-              View all
-            </button>
-          </div>
-          <div className="panel-body">
-            {loading ? (
-              <div className="loading-state">
-                <span className="spinner" /> <span>Loading cases…</span>
+        <div className="workspace-grid">
+          <section className="panel">
+            <PanelHeading
+              eyebrow="Clinical queue"
+              title="Cases requiring attention"
+              action={
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => navigate("/doctor/cases")}
+                >
+                  View all cases
+                </button>
+              }
+            />
+            <div className="panel-body">
+              <div className="toolbar-row doctor-filter-bar">
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search case, patient, location"
+                />
+                <select
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value)}
+                >
+                  <option value="all">All active cases</option>
+                  <option value="awaiting">Awaiting review</option>
+                  <option value="emergency">Emergency</option>
+                  <option value="high">High priority</option>
+                  <option value="urgent">Urgent</option>
+                  <option value="acknowledged">Acknowledged</option>
+                </select>
               </div>
-            ) : urgentCases.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">✓</div>
-                <h4>No urgent cases.</h4>
-                <p>The queue is clear.</p>
-              </div>
-            ) : (
-              <div className="case-list">
-                {urgentCases.map((item) => (
-                  <button
-                    key={item.id}
-                    className="case-card"
-                    onClick={() => navigate(`/doctor/cases/${item.id}`)}
-                  >
-                    <div className="case-card__top">
-                      <div>
-                        <div className="case-card__number">{item.case_number}</div>
-                        <div className="case-card__time">
-                          {new Date(item.created_at).toLocaleString()}
-                        </div>
-                      </div>
-                      <span className={`triage-badge triage-${item.triage_level.toLowerCase().replace('_priority', '')}`}>
-                        {triageLabel(item.triage_level)}
-                      </span>
+              {loading ? (
+                <LoadingState />
+              ) : (
+                <CaseList
+                  cases={
+                    urgentCases.length ? urgentCases : filteredCases.slice(0, 6)
+                  }
+                  onOpen={(item) => navigate(`/doctor/cases/${item.id}`)}
+                  emptyTitle="No cases currently require attention"
+                  emptyText="New submissions and escalations will appear here."
+                />
+              )}
+            </div>
+          </section>
+          <section className="panel">
+            <PanelHeading eyebrow="Triage overview" title="Current case mix" />
+            <div className="panel-body triage-overview">
+              {["ROUTINE", "URGENT", "HIGH_PRIORITY", "EMERGENCY"].map(
+                (level) => (
+                  <div className="triage-overview-row" key={level}>
+                    <span
+                      className={`triage-badge triage-${level.toLowerCase().replace("_priority", "")}`}
+                    >
+                      {triageLabel(level)}
+                    </span>
+                    <strong>
+                      {
+                        cases.filter((item) => item.triage_level === level)
+                          .length
+                      }
+                    </strong>
+                  </div>
+                ),
+              )}
+            </div>
+            <div className="panel-divider" />
+            <PanelHeading
+              eyebrow="PHC alerts"
+              title="Active alerts"
+              action={
+                <button
+                  className="text-link"
+                  onClick={() => navigate("/doctor/alerts")}
+                >
+                  View all
+                </button>
+              }
+            />
+            <div className="panel-body compact-list">
+              {alerts.length ? (
+                alerts
+                  .slice(0, 3)
+                  .map((alert) => <AlertRow key={alert.id} alert={alert} />)
+              ) : (
+                <EmptyState
+                  title="No active alerts"
+                  text="The PHC alert queue is clear."
+                />
+              )}
+            </div>
+          </section>
+        </div>
+        <div className="workspace-grid">
+          <section className="panel">
+            <PanelHeading eyebrow="Recent cases" title="Latest submissions" />
+            <div className="panel-body">
+              {loading ? (
+                <LoadingState />
+              ) : (
+                <CaseList
+                  cases={cases.slice(0, 5)}
+                  onOpen={(item) => navigate(`/doctor/cases/${item.id}`)}
+                  emptyTitle="No recent cases"
+                  emptyText="New ASHA submissions will appear here."
+                />
+              )}
+            </div>
+          </section>
+          <section className="panel">
+            <PanelHeading eyebrow="System activity" title="Recent activity" />
+            <div className="panel-body compact-list">
+              {recentActivity.length ? (
+                recentActivity.map((item) => (
+                  <div className="activity-row" key={item.id}>
+                    <span className="activity-dot" />
+                    <div>
+                      <strong>{statusLabel(item.status)}</strong>
+                      <p>
+                        {item.case_number} · {formatDateTime(item.updated_at)}
+                      </p>
                     </div>
-                    <div className="case-card__body">
-                      <strong className="case-card__patient">{item.patient_reference}</strong>
-                      <span className="case-card__meta">{item.triage_reason}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
+                  </div>
+                ))
+              ) : (
+                <EmptyState
+                  title="No recent activity"
+                  text="Case submissions and review actions will appear here."
+                />
+              )}
+            </div>
+          </section>
+        </div>
       </div>
     </AppShell>
   );
@@ -1758,18 +2111,26 @@ function DoctorCaseIndex() {
                   >
                     <div className="case-card__top">
                       <div>
-                        <div className="case-card__number">{item.case_number}</div>
+                        <div className="case-card__number">
+                          {item.case_number}
+                        </div>
                         <div className="case-card__time">
                           {new Date(item.created_at).toLocaleString()}
                         </div>
                       </div>
-                      <span className={`triage-badge triage-${item.triage_level.toLowerCase().replace('_priority', '')}`}>
+                      <span
+                        className={`triage-badge triage-${item.triage_level.toLowerCase().replace("_priority", "")}`}
+                      >
                         {triageLabel(item.triage_level)}
                       </span>
                     </div>
                     <div className="case-card__body">
-                      <strong className="case-card__patient">{item.patient_reference}</strong>
-                      <span className="case-card__meta">{statusLabel(item.status)}</span>
+                      <strong className="case-card__patient">
+                        {item.patient_reference}
+                      </strong>
+                      <span className="case-card__meta">
+                        {statusLabel(item.status)}
+                      </span>
                     </div>
                   </button>
                 ))}
@@ -1962,11 +2323,15 @@ function DoctorCaseDetail() {
                 <div className="phc-alert-rows">
                   <div className="phc-field">
                     <span className="phc-field-label">Reference</span>
-                    <span className="phc-field-value">{caseData.patient_reference}</span>
+                    <span className="phc-field-value">
+                      {caseData.patient_reference}
+                    </span>
                   </div>
                   <div className="phc-field">
                     <span className="phc-field-label">Age</span>
-                    <span className="phc-field-value">{caseData.patient_age}</span>
+                    <span className="phc-field-value">
+                      {caseData.patient_age}
+                    </span>
                   </div>
                   <div className="phc-field">
                     <span className="phc-field-label">Location</span>
@@ -1983,7 +2348,9 @@ function DoctorCaseDetail() {
             <section className="panel">
               <div className="panel-header">
                 <h3>AI triage</h3>
-                <span className={`triage-badge triage-${caseData.triage_level.toLowerCase().replace('_priority', '')}`}>
+                <span
+                  className={`triage-badge triage-${caseData.triage_level.toLowerCase().replace("_priority", "")}`}
+                >
                   {triageLabel(caseData.triage_level)}
                 </span>
               </div>
@@ -1991,15 +2358,21 @@ function DoctorCaseDetail() {
                 <div className="phc-alert-rows">
                   <div className="phc-field">
                     <span className="phc-field-label">Status</span>
-                    <span className="phc-field-value">{statusLabel(caseData.status)}</span>
+                    <span className="phc-field-value">
+                      {statusLabel(caseData.status)}
+                    </span>
                   </div>
                   <div className="phc-field">
                     <span className="phc-field-label">Confidence</span>
-                    <span className="phc-field-value">{caseData.confidence}%</span>
+                    <span className="phc-field-value">
+                      {caseData.confidence}%
+                    </span>
                   </div>
                   <div className="phc-field">
                     <span className="phc-field-label">Reason</span>
-                    <span className="phc-field-value">{caseData.triage_reason}</span>
+                    <span className="phc-field-value">
+                      {caseData.triage_reason}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -2019,7 +2392,9 @@ function DoctorCaseDetail() {
                   >
                     <strong className="symptom-name">{symptom.name}</strong>
                     <span className="symptom-duration">{symptom.duration}</span>
-                    <span className={`severity-badge severity-${symptom.severity.toLowerCase()}`}>
+                    <span
+                      className={`severity-badge severity-${symptom.severity.toLowerCase()}`}
+                    >
                       {symptom.severity}
                     </span>
                   </div>
@@ -2036,17 +2411,29 @@ function DoctorCaseDetail() {
                 </div>
                 <div className="panel-body">
                   {caseData.follow_up_response.answers.map((answer) => (
-                    <div className="followup-question-item" key={answer.question}>
+                    <div
+                      className="followup-question-item"
+                      key={answer.question}
+                    >
                       <strong>{answer.question}</strong>
-                      <span className="followup-answer">ASHA response: {answer.answer}</span>
+                      <span className="followup-answer">
+                        ASHA response: {answer.answer}
+                      </span>
                     </div>
                   ))}
-                  <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '12px' }}>
-                    Submitted: {new Date(caseData.follow_up_response.submitted_at).toLocaleString()}
+                  <p
+                    className="text-muted"
+                    style={{ fontSize: "0.8rem", marginTop: "12px" }}
+                  >
+                    Submitted:{" "}
+                    {new Date(
+                      caseData.follow_up_response.submitted_at,
+                    ).toLocaleString()}
                   </p>
                   {caseData.follow_up_response.submitted_by && (
-                    <p className="text-muted" style={{ fontSize: '0.8rem' }}>
-                      ASHA Worker: {caseData.follow_up_response.submitted_by.name}
+                    <p className="text-muted" style={{ fontSize: "0.8rem" }}>
+                      ASHA Worker:{" "}
+                      {caseData.follow_up_response.submitted_by.name}
                     </p>
                   )}
                 </div>
@@ -2060,7 +2447,9 @@ function DoctorCaseDetail() {
             <div className="context-body">
               <div className="context-phrase-block">
                 <small>Analyzed Phrase</small>
-                <span className="context-phrase-text">"{caseData.context_analysis.phrase}"</span>
+                <span className="context-phrase-text">
+                  "{caseData.context_analysis.phrase}"
+                </span>
               </div>
               <div className="context-grid">
                 <div className="context-item">
@@ -2073,7 +2462,8 @@ function DoctorCaseDetail() {
                 </div>
               </div>
               <p className="context-interpretation">
-                <strong>Interpretation:</strong> {caseData.context_analysis.interpretation}
+                <strong>Interpretation:</strong>{" "}
+                {caseData.context_analysis.interpretation}
               </p>
             </div>
           </section>
@@ -2115,7 +2505,9 @@ function DoctorCaseDetail() {
                   onClick={() => updateStatus("ACKNOWLEDGE")}
                   disabled={Boolean(action)}
                 >
-                  {action === "ACKNOWLEDGE" ? "Acknowledging case…" : "✓ Acknowledge"}
+                  {action === "ACKNOWLEDGE"
+                    ? "Acknowledging case…"
+                    : "✓ Acknowledge"}
                 </button>
                 <button
                   className="btn btn-secondary"
@@ -2144,12 +2536,17 @@ function DoctorCaseDetail() {
               aria-modal="true"
               aria-labelledby="follow-up-title"
             >
-              <div className="panel-header" style={{ marginBottom: '16px', paddingBottom: '16px' }}>
+              <div
+                className="panel-header"
+                style={{ marginBottom: "16px", paddingBottom: "16px" }}
+              >
                 <h3 id="follow-up-title">Request Follow-up</h3>
               </div>
               <div className="panel-body" style={{ padding: 0 }}>
-                <p>Select the information you want the ASHA worker to verify.</p>
-                <div style={{ marginTop: '16px' }}>
+                <p>
+                  Select the information you want the ASHA worker to verify.
+                </p>
+                <div style={{ marginTop: "16px" }}>
                   {FOLLOW_UP_OPTIONS.map((question) => (
                     <label className="checkbox-row" key={question}>
                       <input
@@ -2167,7 +2564,7 @@ function DoctorCaseDetail() {
                     </label>
                   ))}
                 </div>
-                <label style={{ marginTop: '16px' }}>
+                <label style={{ marginTop: "16px" }}>
                   Note for ASHA worker
                   <textarea
                     rows={3}
@@ -2176,7 +2573,7 @@ function DoctorCaseDetail() {
                     placeholder="Add a note for ASHA worker"
                   />
                 </label>
-                <div className="button-row" style={{ marginTop: '24px' }}>
+                <div className="button-row" style={{ marginTop: "24px" }}>
                   <button
                     className="btn btn-ghost"
                     onClick={() => setShowFollowUp(false)}
@@ -2206,12 +2603,18 @@ function DoctorCaseDetail() {
               aria-modal="true"
               aria-labelledby="escalate-title"
             >
-              <div className="panel-header" style={{ marginBottom: '16px', paddingBottom: '16px' }}>
+              <div
+                className="panel-header"
+                style={{ marginBottom: "16px", paddingBottom: "16px" }}
+              >
                 <h3 id="escalate-title">Escalate case?</h3>
               </div>
               <div className="panel-body" style={{ padding: 0 }}>
-                <p>Are you sure you want to escalate this case to higher medical authorities? This action cannot be undone.</p>
-                <div className="button-row" style={{ marginTop: '24px' }}>
+                <p>
+                  Are you sure you want to escalate this case to higher medical
+                  authorities? This action cannot be undone.
+                </p>
+                <div className="button-row" style={{ marginTop: "24px" }}>
                   <button
                     className="btn btn-ghost"
                     onClick={() => setShowEscalateConfirm(false)}
@@ -2223,7 +2626,9 @@ function DoctorCaseDetail() {
                     onClick={() => updateStatus("ESCALATE")}
                     disabled={Boolean(action)}
                   >
-                    {action === "ESCALATE" ? "Escalating…" : "Yes, escalate case"}
+                    {action === "ESCALATE"
+                      ? "Escalating…"
+                      : "Yes, escalate case"}
                   </button>
                 </div>
               </div>
@@ -2259,21 +2664,6 @@ function timelineLabel(action: string) {
       return "Case escalated by Doctor";
     default:
       return action;
-  }
-}
-
-function triageColor(label: string) {
-  switch (label) {
-    case "ROUTINE":
-      return "#2bb673";
-    case "URGENT":
-      return "#f59e0b";
-    case "HIGH_PRIORITY":
-      return "#f97316";
-    case "EMERGENCY":
-      return "#ef4444";
-    default:
-      return "#8b5cf6";
   }
 }
 
