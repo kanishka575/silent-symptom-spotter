@@ -14,9 +14,11 @@ import {
   createUser,
   getAlertsForUser,
   getCaseById,
+  getCaseTimeline,
   getCasesForUser,
   getUserByEmail,
   getUserById,
+  submitFollowUp,
   updateCaseStatus,
 } from "./database/db.js";
 
@@ -353,7 +355,7 @@ app.patch(
   authMiddleware,
   requireRole("doctor"),
   (req, res) => {
-    const { action, message } = req.body;
+    const { action, message, followUpRequest } = req.body;
     const caseData = getCaseById(req.params.id);
 
     if (!caseData) {
@@ -366,29 +368,130 @@ app.patch(
       ESCALATE: "ESCALATED",
     };
 
-    const nextStatus = statusMap[action] || "ACKNOWLEDGED";
+    if (!statusMap[action]) {
+      return res.status(400).json({ message: "Unsupported case action." });
+    }
+
+    if (
+      action === "REQUEST_FOLLOW_UP" &&
+      (!followUpRequest ||
+        !Array.isArray(followUpRequest.questions) ||
+        followUpRequest.questions.length === 0)
+    ) {
+      return res.status(400).json({
+        message: "At least one follow-up question is required.",
+      });
+    }
+
+    const nextStatus = statusMap[action];
     const updatedCase = updateCaseStatus({
       id: req.params.id,
       status: nextStatus,
       reviewedBy: req.user.id,
       action,
-      message: message || `${action} action recorded by doctor.`,
+      message:
+        message ||
+        (action === "REQUEST_FOLLOW_UP"
+          ? "Doctor requested follow-up."
+          : action === "ESCALATE"
+            ? "Case escalated by Doctor."
+            : "Doctor acknowledged case."),
+      followUpRequest:
+        action === "REQUEST_FOLLOW_UP"
+          ? {
+              questions: followUpRequest.questions,
+              note: followUpRequest.note || "",
+              requested_by: req.user.id,
+              requested_at: new Date().toISOString(),
+            }
+          : undefined,
     });
 
     const creator = getUserById(caseData.created_by);
     if (creator) {
+      const alertByAction = {
+        ACKNOWLEDGE: {
+          title: "Doctor acknowledged case",
+          message: `Doctor acknowledged Case ${caseData.case_number}.`,
+        },
+        REQUEST_FOLLOW_UP: {
+          title: "Follow-up requested",
+          message: `Doctor requested follow-up for Case ${caseData.case_number}.`,
+        },
+        ESCALATE: {
+          title: "Case escalated",
+          message: `Doctor escalated Case ${caseData.case_number}.`,
+        },
+      }[action];
       createAlert({
         caseId: caseData.id,
         recipientUserId: creator.id,
-        type: "CASE_UPDATE",
-        title: "Doctor update",
-        message: `Doctor action: ${action}. Case ${caseData.case_number} was updated.`,
+        type: action,
+        title: alertByAction.title,
+        message: alertByAction.message,
       });
     }
 
     return res.json({ case: updatedCase, action });
   },
 );
+
+app.post(
+  "/api/cases/:id/follow-up",
+  authMiddleware,
+  requireRole("asha"),
+  (req, res) => {
+    const caseData = getCaseById(req.params.id);
+    if (!caseData) {
+      return res.status(404).json({ message: "Case not found." });
+    }
+    if (caseData.created_by !== req.user.id) {
+      return res.status(403).json({ message: "You do not own this case." });
+    }
+    if (caseData.status !== "FOLLOW_UP_REQUIRED") {
+      return res.status(400).json({
+        message: "This case does not have an active follow-up request.",
+      });
+    }
+
+    const { answers, note = "" } = req.body;
+    if (!Array.isArray(answers) || answers.length === 0) {
+      return res
+        .status(400)
+        .json({ message: "Follow-up answers are required." });
+    }
+
+    const updatedCase = submitFollowUp({
+      id: req.params.id,
+      actorId: req.user.id,
+      answers,
+      note,
+    });
+    if (caseData.assigned_doctor) {
+      createAlert({
+        caseId: caseData.id,
+        recipientUserId: caseData.assigned_doctor,
+        type: "FOLLOW_UP_COMPLETED",
+        title: "Follow-up completed",
+        message: `ASHA worker completed follow-up for Case ${caseData.case_number}.`,
+      });
+    }
+    return res.json({ case: updatedCase });
+  },
+);
+
+app.get("/api/cases/:id/timeline", authMiddleware, (req, res) => {
+  const caseData = getCaseById(req.params.id);
+  if (!caseData) return res.status(404).json({ message: "Case not found." });
+  const isAllowed =
+    req.user.role === "asha" ? caseData.created_by === req.user.id : true;
+  if (!isAllowed) {
+    return res
+      .status(403)
+      .json({ message: "You do not have access to this case." });
+  }
+  return res.json({ timeline: getCaseTimeline(req.params.id) });
+});
 
 app.get("/api/alerts", authMiddleware, (req, res) => {
   const alerts = getAlertsForUser(req.user.id);

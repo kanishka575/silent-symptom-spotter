@@ -45,6 +45,10 @@ db.exec(`
     reviewed_by TEXT,
     reviewed_at TEXT,
     follow_up_answers TEXT,
+    follow_up_request TEXT,
+    follow_up_response TEXT,
+    escalated_by TEXT,
+    escalated_at TEXT,
     FOREIGN KEY(created_by) REFERENCES users(id),
     FOREIGN KEY(assigned_doctor) REFERENCES users(id),
     FOREIGN KEY(reviewed_by) REFERENCES users(id)
@@ -74,6 +78,22 @@ db.exec(`
     FOREIGN KEY(recipient_user_id) REFERENCES users(id)
   );
 `);
+
+const caseColumns = db
+  .prepare("PRAGMA table_info(cases)")
+  .all()
+  .map((column) => column.name);
+
+for (const column of [
+  ["follow_up_request", "TEXT"],
+  ["follow_up_response", "TEXT"],
+  ["escalated_by", "TEXT"],
+  ["escalated_at", "TEXT"],
+]) {
+  if (!caseColumns.includes(column[0])) {
+    db.exec(`ALTER TABLE cases ADD COLUMN ${column[0]} ${column[1]}`);
+  }
+}
 
 const seedUsers = [
   {
@@ -172,6 +192,28 @@ export function createCase(input) {
     JSON.stringify(input.follow_up_answers ?? []),
   );
 
+  const createdAt = now;
+  const insertAction = db.prepare(
+    `INSERT INTO case_actions (id, case_id, actor_id, action, message, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  insertAction.run(
+    `action-${Date.now()}-created`,
+    caseId,
+    input.created_by,
+    "CASE_CREATED",
+    "Case created by ASHA worker.",
+    createdAt,
+  );
+  insertAction.run(
+    `action-${Date.now()}-analysis`,
+    caseId,
+    input.created_by,
+    "AI_ANALYSIS_COMPLETED",
+    "AI analysis completed.",
+    createdAt,
+  );
+
   return getCaseById(caseId);
 }
 
@@ -183,6 +225,8 @@ export function getCaseById(id) {
     symptoms: JSON.parse(row.symptoms || "[]"),
     context_analysis: JSON.parse(row.context_analysis || "{}"),
     follow_up_answers: JSON.parse(row.follow_up_answers || "[]"),
+    follow_up_request: JSON.parse(row.follow_up_request || "null"),
+    follow_up_response: JSON.parse(row.follow_up_response || "null"),
   };
 }
 
@@ -198,6 +242,8 @@ export function getCasesForUser(userId, role) {
         symptoms: JSON.parse(row.symptoms || "[]"),
         context_analysis: JSON.parse(row.context_analysis || "{}"),
         follow_up_answers: JSON.parse(row.follow_up_answers || "[]"),
+        follow_up_request: JSON.parse(row.follow_up_request || "null"),
+        follow_up_response: JSON.parse(row.follow_up_response || "null"),
       }));
   }
 
@@ -209,22 +255,99 @@ export function getCasesForUser(userId, role) {
       symptoms: JSON.parse(row.symptoms || "[]"),
       context_analysis: JSON.parse(row.context_analysis || "{}"),
       follow_up_answers: JSON.parse(row.follow_up_answers || "[]"),
+      follow_up_request: JSON.parse(row.follow_up_request || "null"),
+      follow_up_response: JSON.parse(row.follow_up_response || "null"),
     }));
 }
 
-export function updateCaseStatus({ id, status, reviewedBy, action, message }) {
+export function updateCaseStatus({
+  id,
+  status,
+  reviewedBy,
+  action,
+  message,
+  followUpRequest,
+}) {
   const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE cases SET status = ?, updated_at = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?`,
-  ).run(status, now, reviewedBy ?? null, now, id);
+  const update = db.prepare(
+    `UPDATE cases SET
+        status = ?, updated_at = ?, reviewed_by = ?, reviewed_at = ?,
+        follow_up_request = CASE WHEN ? IS NULL THEN follow_up_request ELSE ? END,
+        escalated_by = CASE WHEN ? = 'ESCALATE' THEN ? ELSE escalated_by END,
+        escalated_at = CASE WHEN ? = 'ESCALATE' THEN ? ELSE escalated_at END
+       WHERE id = ?`,
+  );
+  update.run(
+    status,
+    now,
+    reviewedBy ?? null,
+    now,
+    followUpRequest ? JSON.stringify(followUpRequest) : null,
+    followUpRequest ? JSON.stringify(followUpRequest) : null,
+    action,
+    reviewedBy ?? null,
+    action,
+    now,
+    id,
+  );
 
-  const actionId = `action-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   db.prepare(
     `INSERT INTO case_actions (id, case_id, actor_id, action, message, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(actionId, id, reviewedBy, action, message, now);
+       VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    id,
+    reviewedBy,
+    action,
+    message,
+    now,
+  );
 
   return getCaseById(id);
+}
+
+export function submitFollowUp({ id, actorId, answers, note }) {
+  const now = new Date().toISOString();
+  const actor = getUserById(actorId);
+  const response = {
+    answers,
+    note: note || "",
+    submitted_at: now,
+    submitted_by: actor ? { id: actor.id, name: actor.name } : null,
+  };
+  db.prepare(
+    `UPDATE cases SET status = ?, updated_at = ?, follow_up_response = ?, follow_up_answers = ? WHERE id = ?`,
+  ).run(
+    "FOLLOW_UP_COMPLETED",
+    now,
+    JSON.stringify(response),
+    JSON.stringify(answers),
+    id,
+  );
+  db.prepare(
+    `INSERT INTO case_actions (id, case_id, actor_id, action, message, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    id,
+    actorId,
+    "ASHA_FOLLOW_UP_COMPLETED",
+    note || "ASHA worker completed the requested follow-up.",
+    now,
+  );
+  return getCaseById(id);
+}
+
+export function getCaseTimeline(caseId) {
+  return db
+    .prepare(
+      `SELECT case_actions.*, users.name AS actor_name, users.role AS actor_role
+         FROM case_actions
+         LEFT JOIN users ON users.id = case_actions.actor_id
+         WHERE case_actions.case_id = ?
+         ORDER BY case_actions.created_at ASC`,
+    )
+    .all(caseId);
 }
 
 export function createAlert({ caseId, recipientUserId, type, title, message }) {
