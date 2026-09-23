@@ -78,7 +78,7 @@ cp .env.example .env
 Example:
 
 ```env
-VITE_API_URL=http://localhost:5001/api
+VITE_API_URL=https://silent-symptom-spotter.onrender.com/api
 ```
 
 ### Backend

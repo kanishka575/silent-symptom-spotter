@@ -35,22 +35,6 @@ const DEFAULT_DOCTOR_ID = "user-doctor";
 
 app.use(
   cors({
-    origin: (origin, callback) => {
-      const allowedLocalOrigins = [
-        /^http:\/\/localhost:\d+$/,
-        /^http:\/\/127\.0\.0\.1:\d+$/,
-      ];
-
-      if (
-        !origin ||
-        allowedLocalOrigins.some((pattern) => pattern.test(origin))
-      ) {
-        callback(null, true);
-        return;
-      }
-
-      callback(new Error("Origin not allowed by CORS"));
-    },
     credentials: false,
   }),
 );
