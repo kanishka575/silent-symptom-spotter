@@ -18,5 +18,8 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    preview: {
+      allowedHosts: ["silent-symptom-spotter-3.onrender.com"],
+    },
   };
 });
